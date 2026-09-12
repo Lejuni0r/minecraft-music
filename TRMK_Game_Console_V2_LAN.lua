@@ -761,6 +761,244 @@ end
 
 
 -- ================================================================
+-- CLASSIC BOARD & PUZZLE GAMES
+-- ================================================================
+
+local function chooseLocalMode(title, allowAI)
+    local opts=allowAI and {"VS IA","2 JOUEURS LOCAL","RETOUR"} or {"2 JOUEURS LOCAL","RETOUR"}
+    local sel=1
+    while true do
+        cls(); centerText(2,"TRMK GAME CONSOLE",theme.accent); centerText(4,title,theme.yellow)
+        local w=size(); local bw=30; local x=math.floor((w-bw)/2)+1
+        for i,opt in ipairs(opts) do button(x,7+(i-1)*2,x+bw-1,opt,i==sel,theme.accent2) end
+        centerText(16,"Haut/Bas + ENTER   ESC retour",theme.dim)
+        local _,k=os.pullEvent("key")
+        if k==keys.up or k==keys.w then sel=sel-1 if sel<1 then sel=#opts end
+        elseif k==keys.down or k==keys.s then sel=sel+1 if sel>#opts then sel=1 end
+        elseif k==keys.escape or k==keys.q then return nil
+        elseif k==keys.enter then
+            if opts[sel]=="RETOUR" then return nil end
+            return opts[sel]=="VS IA" and "ai" or "local"
+        end
+    end
+end
+
+local function chessGame()
+    local board={
+        {"r","n","b","q","k","b","n","r"}, {"p","p","p","p","p","p","p","p"},
+        {false,false,false,false,false,false,false,false}, {false,false,false,false,false,false,false,false},
+        {false,false,false,false,false,false,false,false}, {false,false,false,false,false,false,false,false},
+        {"P","P","P","P","P","P","P","P"}, {"R","N","B","Q","K","B","N","R"}
+    }
+    local cx,cy=1,8; local sx,sy=nil,nil; local turn="white"; local moveCount=0
+    local function isWhite(p) return p and p:match("%u")~=nil end
+    local function sideOwn(p,side) return p and ((side=="white" and isWhite(p)) or (side=="black" and not isWhite(p))) end
+    local function own(p) return sideOwn(p,turn) end
+    local function clearPath(x1,y1,x2,y2)
+        local dx=(x2>x1 and 1) or (x2<x1 and -1) or 0; local dy=(y2>y1 and 1) or (y2<y1 and -1) or 0
+        local x,y=x1+dx,y1+dy
+        while x~=x2 or y~=y2 do if board[y][x] then return false end; x=x+dx; y=y+dy end
+        return true
+    end
+    local function pseudoLegal(x1,y1,x2,y2,side,allowKingTarget)
+        if x1==x2 and y1==y2 then return false end
+        local p=board[y1][x1]; if not sideOwn(p,side) then return false end
+        local t=board[y2][x2]; if t and sideOwn(t,side) then return false end
+        if t and t:upper()=="K" and not allowKingTarget then return false end
+        local u=p:upper(); local dx=x2-x1; local dy=y2-y1; local adx,ady=math.abs(dx),math.abs(dy)
+        if u=="P" then
+            local dir=isWhite(p) and -1 or 1; local start=isWhite(p) and 7 or 2
+            if dx==0 and dy==dir and not t then return true end
+            if dx==0 and y1==start and dy==2*dir and not t and not board[y1+dir][x1] then return true end
+            if adx==1 and dy==dir and t then return true end
+            return false
+        elseif u=="N" then return (adx==1 and ady==2) or (adx==2 and ady==1)
+        elseif u=="B" then return adx==ady and clearPath(x1,y1,x2,y2)
+        elseif u=="R" then return (dx==0 or dy==0) and clearPath(x1,y1,x2,y2)
+        elseif u=="Q" then return ((dx==0 or dy==0) or adx==ady) and clearPath(x1,y1,x2,y2)
+        elseif u=="K" then return adx<=1 and ady<=1 end
+        return false
+    end
+    local function kingPos(side)
+        for y=1,8 do for x=1,8 do local p=board[y][x]; if p and p:upper()=="K" and sideOwn(p,side) then return x,y end end end
+    end
+    local function attacked(x,y,bySide)
+        for yy=1,8 do for xx=1,8 do
+            local p=board[yy][xx]
+            if sideOwn(p,bySide) then
+                if p:upper()=="P" then
+                    local dir=isWhite(p) and -1 or 1
+                    if y-yy==dir and math.abs(x-xx)==1 then return true end
+                elseif pseudoLegal(xx,yy,x,y,bySide,true) then return true end
+            end
+        end end
+        return false
+    end
+    local function inCheck(side)
+        local kx,ky=kingPos(side); if not kx then return true end
+        return attacked(kx,ky,side=="white" and "black" or "white")
+    end
+    local function legal(x1,y1,x2,y2)
+        if not pseudoLegal(x1,y1,x2,y2,turn,false) then return false end
+        local old=board[y2][x2]; local p=board[y1][x1]
+        board[y2][x2]=p; board[y1][x1]=false
+        local bad=inCheck(turn)
+        board[y1][x1]=p; board[y2][x2]=old
+        return not bad
+    end
+    local function hasLegalMove(side)
+        local oldTurn=turn; turn=side
+        for y1=1,8 do for x1=1,8 do if sideOwn(board[y1][x1],side) then
+            for y2=1,8 do for x2=1,8 do if legal(x1,y1,x2,y2) then turn=oldTurn; return true end end end
+        end end end
+        turn=oldTurn; return false
+    end
+    local function draw()
+        cls(); centerText(1,"ECHECS // LOCAL",theme.yellow)
+        local bx=math.floor((size()-24)/2)+1; local by=3
+        writeAt(bx+2,2,"a  b  c  d  e  f  g  h",theme.dim)
+        for y=1,8 do
+            writeAt(bx-2,by+y-1,tostring(9-y),theme.dim)
+            for x=1,8 do
+                local bg=((x+y)%2==0) and colors.lightGray or colors.gray
+                local p=board[y][x]; local fg=p and (isWhite(p) and colors.white or colors.black) or theme.text
+                fill(bx+(x-1)*3,by+y-1,bx+(x-1)*3+2,by+y-1,bg)
+                if p then writeAt(bx+(x-1)*3+1,by+y-1,p,fg,bg) end
+                if x==cx and y==cy then writeAt(bx+(x-1)*3,by+y-1,"[",theme.yellow,bg); writeAt(bx+(x-1)*3+2,by+y-1,"]",theme.yellow,bg) end
+                if sx==x and sy==y then writeAt(bx+(x-1)*3,by+y-1,"<",theme.accent,bg); writeAt(bx+(x-1)*3+2,by+y-1,">",theme.accent,bg) end
+            end
+        end
+        local state=(turn=="white" and "BLANCS" or "NOIRS").." A JOUER"..(inCheck(turn) and " // ECHEC" or "")
+        centerText(13,state,inCheck(turn) and theme.bad or (turn=="white" and colors.white or colors.lightGray))
+        centerText(15,"Fleches/WASD bouger | ENTER selection/deplacement",theme.dim)
+        centerText(16,"Echec legal + mat/pat + promotion auto (sans roque/en passant)",theme.dim)
+        centerText(18,"ESC quitter",theme.dim)
+    end
+    while true do
+        draw(); local _,k=os.pullEvent("key")
+        if k==keys.escape or k==keys.q then return
+        elseif k==keys.left or k==keys.a then cx=math.max(1,cx-1)
+        elseif k==keys.right or k==keys.d then cx=math.min(8,cx+1)
+        elseif k==keys.up or k==keys.w then cy=math.max(1,cy-1)
+        elseif k==keys.down or k==keys.s then cy=math.min(8,cy+1)
+        elseif k==keys.enter or k==keys.space then
+            if not sx then if own(board[cy][cx]) then sx,sy=cx,cy end
+            else
+                if legal(sx,sy,cx,cy) then
+                    board[cy][cx]=board[sy][sx]; board[sy][sx]=false; moveCount=moveCount+1
+                    local p=board[cy][cx]; if p=="P" and cy==1 then board[cy][cx]="Q" elseif p=="p" and cy==8 then board[cy][cx]="q" end
+                    sx,sy=nil,nil; turn=(turn=="white") and "black" or "white"
+                    if not hasLegalMove(turn) then
+                        local msg=inCheck(turn) and ((turn=="white" and "NOIRS" or "BLANCS").." GAGNENT PAR MAT") or "PAT - EGALITE"
+                        draw(); popup("ECHECS",{msg,"Coups : "..moveCount},"Appuie sur une touche"); waitKey(); return
+                    end
+                elseif own(board[cy][cx]) then sx,sy=cx,cy else sx,sy=nil,nil end
+            end
+        end
+    end
+end
+
+local function checkersGame()
+    local b={}; for y=1,8 do b[y]={}; for x=1,8 do b[y][x]=0 end end
+    for y=1,3 do for x=1,8 do if (x+y)%2==1 then b[y][x]=-1 end end end
+    for y=6,8 do for x=1,8 do if (x+y)%2==1 then b[y][x]=1 end end end
+    local cx,cy=1,8; local sx,sy=nil,nil; local turn=1
+    local function own(v) return v~=0 and ((turn==1 and v>0) or (turn==-1 and v<0)) end
+    local function draw()
+        cls(); centerText(1,"DAMES // LOCAL",theme.yellow); local bx=math.floor((size()-24)/2)+1; local by=3
+        for y=1,8 do for x=1,8 do
+            local bg=((x+y)%2==0) and colors.lightGray or colors.gray; fill(bx+(x-1)*3,by+y-1,bx+(x-1)*3+2,by+y-1,bg)
+            local v=b[y][x]; if v~=0 then local ch=math.abs(v)==2 and "D" or "o"; writeAt(bx+(x-1)*3+1,by+y-1,ch,v>0 and theme.good or theme.accent2,bg) end
+            if x==cx and y==cy then writeAt(bx+(x-1)*3,by+y-1,"[",theme.yellow,bg); writeAt(bx+(x-1)*3+2,by+y-1,"]",theme.yellow,bg) end
+            if sx==x and sy==y then writeAt(bx+(x-1)*3,by+y-1,"<",theme.accent,bg); writeAt(bx+(x-1)*3+2,by+y-1,">",theme.accent,bg) end
+        end end
+        centerText(13,(turn==1 and "VERT" or "ORANGE").." A JOUER",turn==1 and theme.good or theme.accent2)
+        centerText(15,"Fleches/WASD + ENTER | prises diagonales | dames",theme.dim); centerText(18,"ESC quitter",theme.dim)
+    end
+    local function count(side) local n=0 for y=1,8 do for x=1,8 do if b[y][x]*side>0 then n=n+1 end end end return n end
+    while true do
+        draw(); local _,k=os.pullEvent("key")
+        if k==keys.escape or k==keys.q then return
+        elseif k==keys.left or k==keys.a then cx=math.max(1,cx-1) elseif k==keys.right or k==keys.d then cx=math.min(8,cx+1)
+        elseif k==keys.up or k==keys.w then cy=math.max(1,cy-1) elseif k==keys.down or k==keys.s then cy=math.min(8,cy+1)
+        elseif k==keys.enter or k==keys.space then
+            if not sx then if own(b[cy][cx]) then sx,sy=cx,cy end
+            else
+                local v=b[sy][sx]; local dx,dy=cx-sx,cy-sy; local dir=v>0 and -1 or 1; local king=math.abs(v)==2; local moved=false
+                if b[cy][cx]==0 and math.abs(dx)==1 and math.abs(dy)==1 and (king or dy==dir) then moved=true
+                elseif b[cy][cx]==0 and math.abs(dx)==2 and math.abs(dy)==2 and (king or dy==2*dir) then
+                    local mx,my=(sx+cx)/2,(sy+cy)/2; if b[my][mx]~=0 and b[my][mx]*v<0 then b[my][mx]=0; moved=true end
+                end
+                if moved then b[cy][cx]=v; b[sy][sx]=0; if v==1 and cy==1 then b[cy][cx]=2 elseif v==-1 and cy==8 then b[cy][cx]=-2 end; sx,sy=nil,nil
+                    if count(-turn)==0 then popup("DAMES",{(turn==1 and "VERT" or "ORANGE").." GAGNE"},"Appuie sur une touche"); waitKey(); return end
+                    turn=-turn
+                elseif own(b[cy][cx]) then sx,sy=cx,cy else sx,sy=nil,nil end
+            end
+        end
+    end
+end
+
+local function connect4Game(mode)
+    local b={}; for y=1,6 do b[y]={0,0,0,0,0,0,0} end; local col=4; local turn=1
+    local function drop(c,p) for y=6,1,-1 do if b[y][c]==0 then b[y][c]=p; return y end end end
+    local function win(p)
+        for y=1,6 do for x=1,7 do for _,d in ipairs({{1,0},{0,1},{1,1},{1,-1}}) do local ok=true; for i=0,3 do local xx,yy=x+d[1]*i,y+d[2]*i; if xx<1 or xx>7 or yy<1 or yy>6 or b[yy][xx]~=p then ok=false break end end; if ok then return true end end end end
+        return false
+    end
+    local function aiCol()
+        for c=1,7 do if b[1][c]==0 then local y=drop(c,-1); local w=win(-1); b[y][c]=0; if w then return c end end end
+        for c=1,7 do if b[1][c]==0 then local y=drop(c,1); local w=win(1); b[y][c]=0; if w then return c end end end
+        local choices={}; for c=1,7 do if b[1][c]==0 then table.insert(choices,c) end end; return choices[math.random(1,#choices)]
+    end
+    local function draw()
+        cls(); centerText(1,"PUISSANCE 4"..(mode=="ai" and " // VS IA" or " // LOCAL"),theme.yellow); local bx=math.floor((size()-21)/2)+1
+        for x=1,7 do writeAt(bx+(x-1)*3+1,3,tostring(x),x==col and theme.yellow or theme.dim) end
+        for y=1,6 do for x=1,7 do local bg=colors.blue; fill(bx+(x-1)*3,3+y,bx+(x-1)*3+2,3+y,bg); local v=b[y][x]; writeAt(bx+(x-1)*3+1,3+y,v==0 and "." or "O",v==1 and theme.good or (v==-1 and theme.accent2 or colors.white),bg) end end
+        centerText(12,(turn==1 and "VERT" or (mode=="ai" and "IA" or "ORANGE")).." A JOUER",turn==1 and theme.good or theme.accent2)
+        centerText(15,"Gauche/Droite choisir colonne   ENTER poser",theme.dim); centerText(18,"ESC quitter",theme.dim)
+    end
+    local moves=0
+    while true do
+        if mode=="ai" and turn==-1 then local c=aiCol(); drop(c,-1); moves=moves+1; if win(-1) then draw(); popup("PUISSANCE 4",{"L'IA GAGNE"},"Appuie sur une touche"); waitKey(); return end; turn=1 end
+        draw(); local _,k=os.pullEvent("key"); if k==keys.escape or k==keys.q then return elseif k==keys.left or k==keys.a then col=math.max(1,col-1) elseif k==keys.right or k==keys.d then col=math.min(7,col+1) elseif k==keys.enter or k==keys.space then
+            if b[1][col]==0 then drop(col,turn); moves=moves+1; if win(turn) then draw(); popup("PUISSANCE 4",{(turn==1 and "VERT" or "ORANGE").." GAGNE"},"Appuie sur une touche"); waitKey(); return end; if moves>=42 then popup("PUISSANCE 4",{"EGALITE"},"Appuie sur une touche"); waitKey(); return end; turn=-turn end
+        end
+    end
+end
+
+local function ticTacToeGame(mode)
+    local b={{0,0,0},{0,0,0},{0,0,0}}; local cx,cy=2,2; local turn=1; local moves=0
+    local function winner(p) for i=1,3 do if b[i][1]==p and b[i][2]==p and b[i][3]==p then return true end; if b[1][i]==p and b[2][i]==p and b[3][i]==p then return true end end; return (b[1][1]==p and b[2][2]==p and b[3][3]==p) or (b[1][3]==p and b[2][2]==p and b[3][1]==p) end
+    local function aiMove()
+        for _,p in ipairs({-1,1}) do for y=1,3 do for x=1,3 do if b[y][x]==0 then b[y][x]=p; if winner(p) then if p==1 then b[y][x]=0 else return x,y end else b[y][x]=0 end end end end end
+        if b[2][2]==0 then return 2,2 end; local free={}; for y=1,3 do for x=1,3 do if b[y][x]==0 then table.insert(free,{x,y}) end end end; local p=free[math.random(1,#free)]; return p[1],p[2]
+    end
+    local function draw()
+        cls(); centerText(2,"MORPION"..(mode=="ai" and " // VS IA" or " // LOCAL"),theme.yellow); local bx=math.floor((size()-11)/2)+1; local by=6
+        for y=1,3 do for x=1,3 do local bg=(x==cx and y==cy) and colors.gray or theme.bg; local ch=b[y][x]==1 and "X" or (b[y][x]==-1 and "O" or "."); writeAt(bx+(x-1)*4,by+(y-1)*2," "..ch.." ",b[y][x]==1 and theme.good or theme.accent2,bg) end end
+        centerText(14,(turn==1 and "X" or (mode=="ai" and "IA" or "O")).." A JOUER",turn==1 and theme.good or theme.accent2); centerText(17,"Fleches + ENTER   ESC quitter",theme.dim)
+    end
+    while true do
+        if mode=="ai" and turn==-1 then local x,y=aiMove(); b[y][x]=-1; moves=moves+1; if winner(-1) then draw(); popup("MORPION",{"L'IA GAGNE"},"Appuie sur une touche"); waitKey(); return end; turn=1 end
+        draw(); local _,k=os.pullEvent("key"); if k==keys.escape or k==keys.q then return elseif k==keys.left or k==keys.a then cx=math.max(1,cx-1) elseif k==keys.right or k==keys.d then cx=math.min(3,cx+1) elseif k==keys.up or k==keys.w then cy=math.max(1,cy-1) elseif k==keys.down or k==keys.s then cy=math.min(3,cy+1) elseif (k==keys.enter or k==keys.space) and b[cy][cx]==0 then b[cy][cx]=turn; moves=moves+1; if winner(turn) then draw(); popup("MORPION",{(turn==1 and "X" or "O").." GAGNE"},"Appuie sur une touche"); waitKey(); return end; if moves==9 then popup("MORPION",{"EGALITE"},"Appuie sur une touche"); waitKey(); return end; turn=-turn end
+    end
+end
+
+local function lightsOutGame()
+    local b={}; for y=1,5 do b[y]={}; for x=1,5 do b[y][x]=false end end; local cx,cy=3,3; local moves=0
+    local function toggle(x,y) if x>=1 and x<=5 and y>=1 and y<=5 then b[y][x]=not b[y][x] end end
+    for i=1,18 do local x,y=math.random(1,5),math.random(1,5); toggle(x,y); toggle(x-1,y); toggle(x+1,y); toggle(x,y-1); toggle(x,y+1) end
+    local function solved() for y=1,5 do for x=1,5 do if b[y][x] then return false end end end return true end
+    while true do
+        cls(); centerText(2,"LIGHTS OUT",theme.yellow); local bx=math.floor((size()-20)/2)+1; local by=5
+        for y=1,5 do for x=1,5 do local bg=b[y][x] and theme.yellow or colors.gray; if x==cx and y==cy then bg=theme.accent end; fill(bx+(x-1)*4,by+(y-1)*2,bx+(x-1)*4+2,by+(y-1)*2,bg) end end
+        centerText(16,"Moves: "..moves.."   Fleches + ENTER",theme.dim); centerText(18,"Eteins toutes les cases",theme.dim)
+        local _,k=os.pullEvent("key"); if k==keys.escape or k==keys.q then return elseif k==keys.left then cx=math.max(1,cx-1) elseif k==keys.right then cx=math.min(5,cx+1) elseif k==keys.up then cy=math.max(1,cy-1) elseif k==keys.down then cy=math.min(5,cy+1) elseif k==keys.enter or k==keys.space then toggle(cx,cy); toggle(cx-1,cy); toggle(cx+1,cy); toggle(cx,cy-1); toggle(cx,cy+1); moves=moves+1; if solved() then popup("LIGHTS OUT",{"RESOLU !","Moves : "..moves},"Appuie sur une touche"); waitKey(); return end end
+    end
+end
+
+
+-- ================================================================
 -- V2 LAN MULTIPLAYER - ONE COMPUTER PER PLAYER
 -- ================================================================
 
@@ -1805,36 +2043,40 @@ local function helpScreen()
 end
 
 local games={
-    {name="SNAKE",desc="Solo + arene LAN",color=theme.good,
-        run=function() gameLauncher("snake","SNAKE",function() snakeGame("solo") end) end},
-    {name="PONG",desc="IA + duel LAN",color=theme.accent2,
-        run=function() gameLauncher("pong","PONG",function() pongGame("solo") end) end},
-    {name="TETRIS",desc="Solo + garbage LAN",color=theme.accent,
-        run=function() gameLauncher("tetris","TETRIS",function() tetrisGame("solo") end) end},
-    {name="2048",desc="Solo + race LAN",color=theme.yellow,
-        run=function() gameLauncher("game2048","2048",function() game2048("solo") end) end},
-    {name="MINESWEEPER",desc="Solo + race LAN",color=theme.magenta,
-        run=function() gameLauncher("minesweeper","MINESWEEPER",function() minesweeperGame("solo") end) end},
+    {name="SNAKE",desc="Solo + arene LAN",color=theme.good,run=function() gameLauncher("snake","SNAKE",function() snakeGame("solo") end) end},
+    {name="PONG",desc="IA + duel LAN",color=theme.accent2,run=function() gameLauncher("pong","PONG",function() pongGame("solo") end) end},
+    {name="TETRIS",desc="Solo + garbage LAN",color=theme.accent,run=function() gameLauncher("tetris","TETRIS",function() tetrisGame("solo") end) end},
+    {name="2048",desc="Solo + race LAN",color=theme.yellow,run=function() gameLauncher("game2048","2048",function() game2048("solo") end) end},
+    {name="MINESWEEPER",desc="Solo + race LAN",color=theme.magenta,run=function() gameLauncher("minesweeper","MINESWEEPER",function() minesweeperGame("solo") end) end},
+    {name="ECHECS",desc="2 joueurs local",color=colors.white,run=chessGame},
+    {name="DAMES",desc="2 joueurs local",color=theme.accent2,run=checkersGame},
+    {name="PUISSANCE 4",desc="IA ou 2 joueurs",color=colors.red,run=function() local m=chooseLocalMode("PUISSANCE 4",true); if m then connect4Game(m) end end},
+    {name="MORPION",desc="IA ou 2 joueurs",color=theme.good,run=function() local m=chooseLocalMode("MORPION",true); if m then ticTacToeGame(m) end end},
+    {name="LIGHTS OUT",desc="Puzzle solo",color=theme.yellow,run=lightsOutGame},
 }
 
 local function mainMenu()
-    local sel=1; local entries=#games+3
+    local sel=1; local perPage=5
     while true do
-        cls(); centerText(1,"TRMK GAME CONSOLE",theme.accent); centerText(2,"V2 // LAN ARCADE SYSTEM",theme.dim)
-        local w,h=size(); local left,right=4,w-3; box(left,4,right,h-2," GAMES ")
-        for i,g in ipairs(games) do
-            local y=5+(i-1)*2; local active=sel==i; local bg=active and g.color or theme.bg; local fg=active and colors.black or g.color
-            fill(left+2,y,right-2,y,bg); writeAt(left+4,y,trunc(g.name,16),fg,bg); writeAt(left+19,y,trunc(g.desc,right-left-22),active and colors.black or theme.dim,bg)
+        local pages=math.ceil(#games/perPage); local page=math.floor((sel-1)/perPage)+1
+        cls(); centerText(1,"TRMK GAME CONSOLE",theme.accent); centerText(2,"ARCADE + CLASSICS // PAGE "..page.."/"..pages,theme.dim)
+        local w,h=size(); local left,right=3,w-2; box(left,4,right,h-3," GAMES ")
+        local first=(page-1)*perPage+1; local last=math.min(#games,first+perPage-1)
+        local row=0
+        for i=first,last do
+            row=row+1; local g=games[i]; local y=5+(row-1)*2; local active=sel==i; local bg=active and g.color or theme.bg; local fg=active and colors.black or g.color
+            fill(left+2,y,right-2,y,bg); writeAt(left+4,y,trunc(g.name,16),fg,bg); writeAt(left+20,y,trunc(g.desc,right-left-23),active and colors.black or theme.dim,bg)
         end
-        local yBase=5+#games*2; local extra={{"HALL OF FAME"},{"CONTROLES / HELP"},{"QUITTER"}}
-        for i,e in ipairs(extra) do local idx=#games+i; button(left+2,yBase+i-1,right-2,e[1],sel==idx) end
-        writeAt(2,h,"Haut/Bas naviguer   ENTER jouer   ESC quitter",theme.dim)
+        centerText(16,"Haut/Bas selection   Gauche/Droite page",theme.dim)
+        centerText(17,"ENTER jouer   H scores   ? aide   ESC quitter",theme.dim)
         local _,k=os.pullEvent("key")
-        if k==keys.up or k==keys.w then sel=sel-1; if sel<1 then sel=entries end
-        elseif k==keys.down or k==keys.s then sel=sel+1; if sel>entries then sel=1 end
-        elseif k==keys.enter then
-            if sel<=#games then save.totalPlays=save.totalPlays+1; saveData(); games[sel].run()
-            elseif sel==#games+1 then scoreScreen() elseif sel==#games+2 then helpScreen() else return end
+        if k==keys.up or k==keys.w then sel=sel-1; if sel<1 then sel=#games end
+        elseif k==keys.down or k==keys.s then sel=sel+1; if sel>#games then sel=1 end
+        elseif k==keys.left then sel=math.max(1,sel-perPage)
+        elseif k==keys.right then sel=math.min(#games,sel+perPage)
+        elseif k==keys.h then scoreScreen()
+        elseif k==keys.slash then helpScreen()
+        elseif k==keys.enter then save.totalPlays=save.totalPlays+1; saveData(); games[sel].run()
         elseif k==keys.escape or k==keys.q then return end
     end
 end
