@@ -23,10 +23,10 @@ Controls while playing:
   Q      stop
   -      volume down
   =/+    volume up
-  Monitor touch: PAUSE / STOP / VOL- / VOL+
+  Monitor touch: controles si ecran assez grand; pause/reprise plein ecran sinon
 ]]
 
-local VERSION = "1.0.0"
+local VERSION = "1.1.0"
 local CONTROL_EVENT = "trmk_tv_control"
 
 local function fail(msg)
@@ -93,12 +93,27 @@ pcall(monitor.setTextScale, opts.scale)
 local speaker = peripheral.find("speaker")
 local haveAudio = speaker ~= nil
 
-local mw, mh = monitor.getSize()
-if mh < 6 or mw < 20 then
-    fail(("Monitor trop petit (%dx%d). Agrandis-le ou utilise --scale 0.5."):format(mw, mh))
+local mw, mh
+local videoH
+local showControlBar
+local compactScreen
+
+local function refreshLayout()
+    mw, mh = monitor.getSize()
+    if mw < 4 or mh < 3 then
+        fail(("Monitor trop petit (%dx%d)."):format(mw, mh))
+    end
+
+    -- Sur les petits ecrans (notamment un Advanced Monitor 1x1 = 15x10
+    -- a l'echelle 0.5), toute la surface est reservee a la video.
+    -- A partir d'une taille confortable, on reserve la derniere ligne
+    -- pour des controles tactiles.
+    compactScreen = (mw < 24 or mh < 12)
+    showControlBar = not compactScreen
+    videoH = showControlBar and (mh - 1) or mh
 end
 
-local videoH = mh - 1
+refreshLayout()
 
 -- Save monitor palette so we can restore it.
 local savedPalette = {}
@@ -144,10 +159,25 @@ end
 
 local function splash(title, subtitle, status)
     clearMonitor(colors.black)
-    mcenter(2, "TRMK TV", colors.red)
-    mcenter(4, title or "", colors.white)
-    if subtitle then mcenter(6, subtitle, colors.lightGray) end
-    if status then mcenter(math.min(mh - 1, 9), status, colors.yellow) end
+
+    -- Placement adaptatif : pas de coordonnees fixes qui debordent sur
+    -- un petit monitor, tout en gardant un rendu aere sur un grand ecran.
+    if mh <= 5 then
+        mcenter(1, "TRMK TV", colors.red)
+        if title then mcenter(math.min(2, mh), title, colors.white) end
+        if status then mcenter(mh, status, colors.yellow) end
+        return
+    end
+
+    local yLogo = math.max(1, math.floor(mh * 0.16))
+    local yTitle = math.max(yLogo + 1, math.floor(mh * 0.38))
+    local ySub = math.max(yTitle + 1, math.floor(mh * 0.58))
+    local yStatus = math.min(mh, math.max(ySub + 1, math.floor(mh * 0.80)))
+
+    mcenter(yLogo, "TRMK TV", colors.red)
+    mcenter(yTitle, title or "", colors.white)
+    if subtitle and ySub <= mh then mcenter(ySub, subtitle, colors.lightGray) end
+    if status and yStatus <= mh then mcenter(yStatus, status, colors.yellow) end
 end
 
 -- -------------------------------------------------------------------------
@@ -444,11 +474,37 @@ local state = {
 
 local hit = {}
 local function drawControls()
+    hit = {}
+    if not showControlBar then return end
+
     local y = mh
     monitor.setBackgroundColor(colors.gray)
     monitor.setTextColor(colors.white)
     monitor.setCursorPos(1, y)
     monitor.write(string.rep(" ", mw))
+
+    if mw < 28 then
+        local x = 1
+        local pauseLabel = state.paused and " > " or "II "
+        mwrite(x, y, pauseLabel, colors.black, state.paused and colors.lime or colors.yellow)
+        hit.pause = { x, x + #pauseLabel - 1 }
+        x = x + #pauseLabel + 1
+
+        local stopLabel = " X "
+        mwrite(x, y, stopLabel, colors.white, colors.red)
+        hit.stop = { x, x + #stopLabel - 1 }
+        x = x + #stopLabel + 1
+
+        local minus = " - "
+        mwrite(x, y, minus, colors.white, colors.blue)
+        hit.minus = { x, x + #minus - 1 }
+        x = x + #minus + 1
+
+        local plus = " + "
+        mwrite(x, y, plus, colors.white, colors.blue)
+        hit.plus = { x, math.min(mw, x + #plus - 1) }
+        return
+    end
 
     local pauseLabel = state.paused and " PLAY " or " PAUSE "
     local x = 1
@@ -509,13 +565,17 @@ local function controlsLoop()
             end
         elseif ev == "monitor_touch" then
             local x, y = b, c
-            if y == mh then
+            if showControlBar and y == mh then
                 local function inside(r) return r and x >= r[1] and x <= r[2] end
                 if inside(hit.pause) then togglePause()
                 elseif inside(hit.stop) then stopPlayback()
                 elseif inside(hit.minus) then setVolume(state.volume - 0.15)
                 elseif inside(hit.plus) then setVolume(state.volume + 0.15)
                 end
+            elseif not showControlBar then
+                -- En mode petit ecran, aucune ligne n'est sacrifiee pour l'UI.
+                -- Un toucher n'importe ou met simplement pause/reprend.
+                togglePause()
             end
         elseif ev == "terminate" then
             stopPlayback()
@@ -563,6 +623,9 @@ local function getInput()
     term.setTextColor(colors.cyan)
     print(("TRMK TV v%s"):format(VERSION))
     term.setTextColor(colors.white)
+    print(("Monitor: %dx%d | video: %dx%d | UI: %s"):format(
+        mw, mh, mw, videoH, showControlBar and "barre tactile" or "plein ecran"
+    ))
     print("Colle une URL YouTube ou un terme de recherche :")
     term.write("> ")
     return read()
@@ -616,8 +679,10 @@ local function main()
 
     state.title = tostring(media.title or "Video")
     clearMonitor(colors.black)
-    mcenter(math.max(2, math.floor(videoH / 2)), state.title:sub(1, mw - 2), colors.white)
-    mcenter(math.max(3, math.floor(videoH / 2) + 2), "Buffering...", colors.yellow)
+    local titleY = math.max(1, math.floor(videoH / 2))
+    local bufferY = math.min(videoH, titleY + 2)
+    mcenter(titleY, state.title:sub(1, math.max(1, mw - 2)), colors.white)
+    if bufferY ~= titleY then mcenter(bufferY, "Buffering...", colors.yellow) end
     drawControls()
 
     local audioBuf = newBuffer(32)
